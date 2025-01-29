@@ -1,5 +1,4 @@
 import os
-import fitz  # PyMuPDF
 import streamlit as st
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -12,9 +11,6 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 openai_api_key = os.getenv('OPENAI_API_KEY')
-
-# Set Poppler path explicitly (if necessary)
-os.environ["POPPLER_PATH"] = r"C:\poppler\bin"  # Replace with your Poppler path
 
 # Set Streamlit page configuration
 st.set_page_config(page_title="Interactive PDF Chatbot", layout="wide")
@@ -46,73 +42,62 @@ def predict_ans(chroma_db, llm, question):
     answer = chain.run(question)
     return answer
 
-# Function to extract PDF pages and display them
-def display_pdf(pdf_path, dpi=300):  # Increase DPI for larger image size
-    doc = fitz.open(pdf_path)
-    num_pages = doc.page_count
-    pdf_images = []
-    for i in range(num_pages):
-        page = doc.load_page(i)
-        pix = page.get_pixmap(dpi=dpi)
-        img_path = f"page_{i}.png"
-        # pix.save(img_path)
-        pdf_images.append(img_path)
-    return pdf_images
-
-# Streamlit app UI
 st.title("Interactive PDF Chatbot with Streamlit")
 
-# File uploader in Streamlit
-pdf_file = st.file_uploader("Upload a PDF", type=["pdf"])
+# Sidebar for chat history
+st.sidebar.title("Chat History")
+if "chats" not in st.session_state:
+    st.session_state.chats = {}
+if "current_chat" not in st.session_state:
+    st.session_state.current_chat = "New Chat"
+if "history" not in st.session_state:
+    st.session_state.history = []
 
-if pdf_file is not None:
-    with open("uploaded_pdf.pdf", "wb") as f:
-        f.write(pdf_file.getbuffer())
+chat_name = st.sidebar.text_input("Chat Name", st.session_state.current_chat)
+if st.sidebar.button("Save Chat"):
+    if chat_name and chat_name != "New Chat":
+        st.session_state.chats[chat_name] = st.session_state.history
+        st.session_state.current_chat = chat_name
 
-    data_chunks = load_pdf("uploaded_pdf.pdf")
-    chroma_db = create_embeddings(data_chunks)
-    llm = load_model()
+chat_selection = st.sidebar.radio("Select a Chat", ["New Chat"] + list(st.session_state.chats.keys()))
+if chat_selection != st.session_state.current_chat:
+    st.session_state.current_chat = chat_selection
+    st.session_state.history = st.session_state.chats.get(chat_selection, [])
 
-    # Style for full-screen layout
-    st.markdown("""
-        <style>
-            .pdf-container {
-                overflow-y: auto;
-                max-height: 700px;
-                padding: 10px;
-                width: 100%;
-            }
-            .pdf-image {
-                width: 100%;
-                margin-bottom: 10px;
-            }
-            .chat-section {
-                margin-top: 20px;
-                background-color: #f9f9f9;
-                padding: 20px;
-                border-radius: 10px;
-            }
-        </style>
-    """, unsafe_allow_html=True)
+# Main chat interface
+col1, col2 = st.columns([1, 3])
 
-    # Full-width columns for PDF and chat
-    col1, col2 = st.columns([2, 3])
+with col2:
+    pdf_file = st.file_uploader("Upload a PDF", type=["pdf"])
+    if pdf_file is not None:
+        with open("uploaded_pdf.pdf", "wb") as f:
+            f.write(pdf_file.getbuffer())
 
-    with col1:
-        st.subheader("PDF Preview")
-        pdf_images = display_pdf("uploaded_pdf.pdf")
-        for image in pdf_images:
-            st.image(image, caption="Page", use_container_width=True)
+        data_chunks = load_pdf("uploaded_pdf.pdf")
+        chroma_db = create_embeddings(data_chunks)
+        llm = load_model()
 
-    with col2:
-        st.subheader("Ask a Question")
-        user_question = st.text_input("Enter your question about the PDF:")
+        # Display chat history
+        chat_container = st.container()
+        with chat_container:
+            for question, answer in reversed(st.session_state.history):
+                st.markdown(f"**You:** {question}")
+                st.markdown(f"**Chatbot:** {answer}")
+                st.markdown("---")
 
+        # Input box for new questions (fixed at the bottom)
+        user_question = st.text_input("Ask a question about the PDF:", key=f"question_input_{len(st.session_state.history)}")
+
+        # Only process the question if it's new (avoid repeating the same question)
         if user_question:
             if user_question.lower() in ['exit', 'quit']:
                 st.write("Exiting the program.")
             else:
                 answer = predict_ans(chroma_db, llm, user_question)
-                st.markdown(f"<div class='chat-section'><strong>Answer:</strong> {answer}</div>", unsafe_allow_html=True)
-else:
-    st.write("Please upload a PDF file to begin.")
+                st.session_state.history.append((user_question, answer))
+
+                # Refresh the page to show the updated chat
+                st.rerun()
+
+    else:
+        st.write("Please upload a PDF file to begin.")
